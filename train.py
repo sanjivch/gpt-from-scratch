@@ -1,6 +1,21 @@
 import torch
-from gpt import BiGramLM
+from bigram import BiGramLM
 
+
+# Hyperparameters
+# ===============
+batch_size = 32
+context_length = 8
+num_epochs = 3000
+eval_interval = 300
+learning_rate = 1e-2
+device ="cuda" if torch.cuda.is_available() else "cpu"
+eval_iters = 200
+
+torch.manual_seed(1337)
+
+
+# Read data
 with open('dataset/input.txt', 'r', encoding='utf-8') as f:
     text = f.read()
 
@@ -40,10 +55,7 @@ data = torch.tensor(tokenize(text), dtype=torch.long)
 train_data = data[:int(0.9* len(data))]
 val_data = data[int(0.9* len(data)):]
 
-# get batches of data
-torch.manual_seed(1337)
-batch_size = 4
-context_length = 8
+# Data Loader - get batches of data
 print(train_data[:context_length+1])
 
 def get_batch(split):
@@ -54,7 +66,25 @@ def get_batch(split):
     y = torch.stack([data[id+1:id+context_length+1] for id in idx])
     # x_train = train_data[:context_length]
     # y_train = train_data[1:context_length+1]
+    x, y = x.to(device), y.to(device)
     return x, y
+
+
+@torch.no_grad()
+def estimate_loss():
+    out = {}
+    model.eval()
+    for split in ["train", "val"]:
+        losses = torch.zeros(eval_iters)
+        for k in range(eval_iters):
+            X, Y = get_batch(split)
+            logits, loss = model(X,Y)
+            losses[k] = loss.item()
+        out[split] = losses.mean()
+    
+    model.train()
+    return out
+
 
 xb, yb = get_batch('train')
 # print(xb.shape, yb.shape)
@@ -66,10 +96,11 @@ for b in range(batch_size):
 
         # print(f"{context=} {target=}")
 
-m = BiGramLM(vocab_size)
-logits, loss = m(xb, yb) 
+model = BiGramLM(vocab_size)
+model= model.to(device)
+# logits, loss = m(xb, yb) 
 
-print(logits.shape, loss)
+# print(logits.shape, loss)
 
 # generate new tokens - start with new line (one character) and batch_size is 1  
 # idx = torch.zeros((1,1), dtype=torch.long)
@@ -78,23 +109,26 @@ print(logits.shape, loss)
 
 # Training loop
 
-optimizer = torch.optim.AdamW(m.parameters(), lr=1e-3)
-batch_size = 32
-num_epochs = 10000
-for steps in range(num_epochs):
+optimizer = torch.optim.AdamW(model.parameters(), lr=learning_rate)
+
+for epoch in range(num_epochs):
+
+    if epoch % eval_interval == 0:
+        losses = estimate_loss()
+        print(f"{epoch=} train loss {losses['train']}; val loss {losses['val']}")
 
     # get batch
     xb, yb = get_batch('train')
 
     # evaluate loss
-    logits, loss = m(xb, yb)
+    logits, loss = model(xb, yb)
     optimizer.zero_grad(set_to_none=True)
     loss.backward()
     optimizer.step()
 
-    print(f"{steps=} {loss.item()}")
+    # print(f"{steps=} {loss.item()}")
 
 # generate new tokens - start with new line (one character) and batch_size is 1  
-idx = torch.zeros((1,1), dtype=torch.long)
-gen_token_ids = m.generate(idx, max_new_tokens=500)[0].tolist()
+context = torch.zeros((1,1), dtype=torch.long).to(device)
+gen_token_ids = model.generate(context, max_new_tokens=500)[0].tolist()
 print(detokenize(gen_token_ids))
